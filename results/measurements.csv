@@ -1,1 +1,5 @@
-test_name,traffic_type,latency_ms,packet_loss_percent,delivery_rate_percent
+Case,Sent,Lost,Delivery %,Avg RTT (ms),P95 RTT (ms)
+Normal Baseline,50,0,100,12.5,15.2
+Emergency Baseline,50,0,100,11.8,14.1
+Normal Congested,50,8,84,145.2,210.5
+Emergency Congested,50,1,98,25.4,35.0
