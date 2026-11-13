@@ -6,21 +6,23 @@ import uuid
 import threading
 
 HOST = "0.0.0.0"
-PORT = 5000
+NORMAL_PORT = 5000
+EMERGENCY_PORT = 5001
 BUFFER_SIZE = 4096
 
-ACK_TIMEOUT = 2.0
+ACK_TIMEOUT = 0.2
 MAX_RETRIES = 3
+DSCP_EF = 46 << 2
 
 subscribers = {}
 pending = {}
-seen_notifications = {}
+seen_notifications = set()
 lock = threading.Lock()
 
 
-def send_json(server, message, address):
+def send_json(sock, message, address):
     data = json.dumps(message).encode("utf-8")
-    server.sendto(data, address)
+    sock.sendto(data, address)
 
 
 def register_subscriber(server, message, address):
@@ -41,11 +43,31 @@ def register_subscriber(server, message, address):
     }, address)
 
 
-def process_notification(server, message, address):
+def unsubscribe_subscriber(server, address):
+    with lock:
+        subscriber = subscribers.pop(address, None)
+
+        expired = [
+            key for key in pending if key[1] == address
+        ]
+
+        for key in expired:
+            pending.pop(key, None)
+
+    if subscriber:
+        print(f"[UNSUBSCRIBE] {subscriber['name']} disconnected")
+
+        send_json(server, {
+            "type": "UNSUBSCRIBE_ACK",
+            "message": "Successfully unsubscribed"
+        }, address)
+
+
+def process_notification(server, message, address, priority):
     notification_id = str(message.get("id", ""))
-    priority = str(message.get("priority", "NORMAL")).upper()
     text = str(message.get("message", "")).strip()
     sender = str(message.get("sender", "Unknown"))
+    ack_required = priority == "EMERGENCY"
 
     if not notification_id or not text:
         send_json(server, {
@@ -54,32 +76,21 @@ def process_notification(server, message, address):
         }, address)
         return
 
-    if priority not in ("NORMAL", "EMERGENCY"):
-        send_json(server, {
-            "type": "ERROR",
-            "message": "Priority must be NORMAL or EMERGENCY"
-        }, address)
-        return
-
-    now = time.time()
-
-    notification = {
-        "type": "NOTIFICATION",
-        "id": notification_id,
-        "priority": priority,
-        "message": text,
-        "sender": sender,
-        "sent_at": message.get("sent_at", now),
-        "server_received_at": now
-    }
-
     with lock:
+        if address not in subscribers:
+            send_json(server, {
+                "type": "ERROR",
+                "message": "Register before sending notifications"
+            }, address)
+            return
+
         if notification_id in seen_notifications:
             duplicate = True
             recipients = []
         else:
             duplicate = False
-            seen_notifications[notification_id] = now
+            seen_notifications.add(notification_id)
+
             recipients = [
                 (client_address, info["name"])
                 for client_address, info in subscribers.items()
@@ -94,40 +105,63 @@ def process_notification(server, message, address):
         }, address)
         return
 
+    now = time.time()
+
+    notification = {
+        "type": "NOTIFICATION",
+        "id": notification_id,
+        "priority": priority,
+        "message": text,
+        "sender": sender,
+        "sent_at": message.get("sent_at", now),
+        "ack_required": ack_required
+    }
+
+    delivered = 0
+
     for client_address, name in recipients:
-        try:
-            send_json(server, notification, client_address)
+        if ack_required:
+            key = (notification_id, client_address)
 
             with lock:
-                pending[(notification_id, client_address)] = {
+                pending[key] = {
                     "notification": notification,
                     "last_sent": time.monotonic(),
                     "retries": 0,
                     "name": name
                 }
 
+        try:
+            send_json(server, notification, client_address)
+            delivered += 1
         except OSError as error:
             print(f"[SEND ERROR] {name}: {error}")
 
+            if ack_required:
+                with lock:
+                    pending.pop((notification_id, client_address), None)
+
     print(
         f"[{priority}] ID={notification_id} "
-        f"from={sender} recipients={len(recipients)}"
+        f"from={sender} recipients={delivered}"
     )
 
     send_json(server, {
         "type": "ACK",
         "id": notification_id,
         "message": "Notification accepted by server",
-        "recipient_count": len(recipients),
+        "recipient_count": delivered,
         "server_ack_time": time.time()
     }, address)
 
 
 def process_delivery_ack(message, address):
     notification_id = str(message.get("id", ""))
+    key = (notification_id, address)
 
     with lock:
-        item = pending.pop((notification_id, address), None)
+        item = pending.pop(key, None)
+
         subscriber = subscribers.get(address)
 
     if item:
@@ -136,15 +170,16 @@ def process_delivery_ack(message, address):
         ) * 1000
 
         name = subscriber["name"] if subscriber else str(address)
+
         print(
             f"[DELIVERY ACK] ID={notification_id} "
-            f"from={name} acknowledgement_delay={elapsed_ms:.2f} ms"
+            f"from={name} delay={elapsed_ms:.2f} ms"
         )
 
 
-def retry_unacknowledged(server):
+def retry_unacknowledged(emergency_server):
     while True:
-        time.sleep(0.2)
+        time.sleep(0.02)
         now = time.monotonic()
 
         with lock:
@@ -165,9 +200,11 @@ def retry_unacknowledged(server):
 
                 if item["retries"] >= MAX_RETRIES:
                     pending.pop(key, None)
+                    subscribers.pop(address, None)
+
                     print(
                         f"[DELIVERY FAILED] ID={notification_id} "
-                        f"subscriber={item['name']}"
+                        f"subscriber={item['name']} removed"
                     )
                     continue
 
@@ -176,16 +213,22 @@ def retry_unacknowledged(server):
                 retry_number = item["retries"]
 
             try:
-                send_json(server, item["notification"], address)
-                print(
-                    f"[RETRY {retry_number}] ID={notification_id} "
-                    f"to={item['name']}"
+                send_json(
+                    emergency_server,
+                    item["notification"],
+                    address
                 )
+
+                print(
+                    f"[RETRY {retry_number}] "
+                    f"ID={notification_id} to={item['name']}"
+                )
+
             except OSError as error:
                 print(f"[RETRY ERROR] {item['name']}: {error}")
 
 
-def process_message(server, data, address):
+def process_message(server, data, address, port):
     try:
         message = json.loads(data.decode("utf-8"))
 
@@ -195,19 +238,35 @@ def process_message(server, data, address):
         message_type = message.get("type")
 
         if message_type == "REGISTER":
+            if port != NORMAL_PORT:
+                raise ValueError("Registration must use normal port")
             register_subscriber(server, message, address)
 
+        elif message_type == "UNSUBSCRIBE":
+            unsubscribe_subscriber(server, address)
+
         elif message_type == "NOTIFY":
-            process_notification(server, message, address)
+            priority = str(message.get("priority", "NORMAL")).upper()
+
+            if priority not in ("NORMAL", "EMERGENCY"):
+                raise ValueError("Invalid notification priority")
+
+            expected_port = (
+                EMERGENCY_PORT
+                if priority == "EMERGENCY"
+                else NORMAL_PORT
+            )
+
+            if port != expected_port:
+                raise ValueError("Notification sent to incorrect port")
+
+            process_notification(server, message, address, priority)
 
         elif message_type == "DELIVERY_ACK":
             process_delivery_ack(message, address)
 
         else:
-            send_json(server, {
-                "type": "ERROR",
-                "message": "Unknown message type"
-            }, address)
+            raise ValueError("Unknown message type")
 
     except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as error:
         print(f"[INVALID MESSAGE] {address}: {error}")
@@ -215,28 +274,62 @@ def process_message(server, data, address):
         try:
             send_json(server, {
                 "type": "ERROR",
-                "message": "Invalid message format"
+                "message": str(error)
             }, address)
         except OSError:
             pass
 
 
+def receive_loop(server, port):
+    while True:
+        try:
+            data, address = server.recvfrom(BUFFER_SIZE)
+            process_message(server, data, address, port)
+
+        except OSError as error:
+            print(f"[RECEIVE ERROR] Port {port}: {error}")
+            break
+
+
 def main():
-    server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    normal_server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    emergency_server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     try:
-        server.bind((HOST, PORT))
+        normal_server.bind((HOST, NORMAL_PORT))
+        emergency_server.bind((HOST, EMERGENCY_PORT))
+
+        emergency_server.setsockopt(
+            socket.IPPROTO_IP,
+            socket.IP_TOS,
+            DSCP_EF
+        )
+
+        print("Emergency Notification Server started")
+        print(f"Normal traffic: UDP {NORMAL_PORT}")
+        print(f"Emergency traffic: UDP {EMERGENCY_PORT}")
+        print("Emergency DSCP: 46")
+
         threading.Thread(
             target=retry_unacknowledged,
-            args=(server,),
+            args=(emergency_server,),
             daemon=True
         ).start()
 
-        print(f"Emergency Notification Server listening on UDP {PORT}")
+        threading.Thread(
+            target=receive_loop,
+            args=(normal_server, NORMAL_PORT),
+            daemon=True
+        ).start()
+
+        threading.Thread(
+            target=receive_loop,
+            args=(emergency_server, EMERGENCY_PORT),
+            daemon=True
+        ).start()
 
         while True:
-            data, address = server.recvfrom(BUFFER_SIZE)
-            process_message(server, data, address)
+            time.sleep(1)
 
     except KeyboardInterrupt:
         print("\nServer shutting down.")
@@ -245,9 +338,9 @@ def main():
         print(f"[SERVER ERROR] {error}")
 
     finally:
-        server.close()
+        normal_server.close()
+        emergency_server.close()
 
 
 if __name__ == "__main__":
     main()
-
