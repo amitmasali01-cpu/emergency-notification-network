@@ -1,3 +1,4 @@
+
 import socket
 import json
 import time
@@ -6,26 +7,20 @@ import threading
 import os
 
 SERVER_HOST = os.environ.get("SERVER_HOST", "127.0.0.1")
-
 SERVER_PORT = 5000
 EMERGENCY_PORT = 5001
-
+DSCP_EF = 46 << 2
 BUFFER_SIZE = 4096
 ACK_TIMEOUT = 2.0
 MAX_RETRIES = 3
-
-DSCP_EF = 46
-IP_TOS_EF = DSCP_EF << 2
 
 client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 client.settimeout(0.5)
 
 running = True
 name = "Anonymous"
-
 seen_notifications = set()
 pending_sends = {}
-
 lock = threading.Lock()
 send_lock = threading.Lock()
 
@@ -35,38 +30,19 @@ def send_json(message, port=SERVER_PORT, dscp=0):
 
     with send_lock:
         previous_tos = client.getsockopt(
-            socket.IPPROTO_IP,
-            socket.IP_TOS
+            socket.IPPROTO_IP, socket.IP_TOS
         )
-
         try:
-            client.setsockopt(
-                socket.IPPROTO_IP,
-                socket.IP_TOS,
-                dscp
-            )
-
+            client.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, dscp)
             client.sendto(data, (SERVER_HOST, port))
-
         finally:
             client.setsockopt(
-                socket.IPPROTO_IP,
-                socket.IP_TOS,
-                previous_tos
+                socket.IPPROTO_IP, socket.IP_TOS, previous_tos
             )
 
 
 def send_notification(priority, text):
     notification_id = str(uuid.uuid4())
-
-    priority = priority.upper()
-
-    if priority == "EMERGENCY":
-        port = EMERGENCY_PORT
-        dscp = IP_TOS_EF
-    else:
-        port = SERVER_PORT
-        dscp = 0
 
     message = {
         "type": "NOTIFY",
@@ -76,6 +52,9 @@ def send_notification(priority, text):
         "sender": name,
         "sent_at": time.time()
     }
+
+    port = EMERGENCY_PORT if priority == "EMERGENCY" else SERVER_PORT
+    dscp = DSCP_EF if priority == "EMERGENCY" else 0
 
     with lock:
         pending_sends[notification_id] = {
@@ -88,17 +67,7 @@ def send_notification(priority, text):
 
     try:
         send_json(message, port, dscp)
-
-        print(
-            f"[SENT] {priority} notification "
-            f"ID={notification_id}"
-        )
-
-        print(f"[UDP PORT] {port}")
-
-        if priority == "EMERGENCY":
-            print(f"[DSCP] {DSCP_EF}")
-
+        print(f"[SENT] {priority} notification ID={notification_id}")
     except OSError as error:
         print(f"[SEND ERROR] {error}")
 
@@ -106,7 +75,6 @@ def send_notification(priority, text):
 def retry_unacknowledged():
     while running:
         time.sleep(0.2)
-
         now = time.monotonic()
 
         with lock:
@@ -117,7 +85,6 @@ def retry_unacknowledged():
             ]
 
         for notification_id, item in expired:
-
             with lock:
                 current = pending_sends.get(notification_id)
 
@@ -126,31 +93,22 @@ def retry_unacknowledged():
 
                 if item["retries"] >= MAX_RETRIES:
                     pending_sends.pop(notification_id, None)
-
                     print(
-                        f"[ACK TIMEOUT] No server acknowledgement "
-                        f"for {notification_id}"
+                        f"[ACK TIMEOUT] No server acknowledgement for "
+                        f"{notification_id}"
                     )
-
                     continue
 
                 item["retries"] += 1
                 item["last_sent"] = time.monotonic()
-
                 retry_number = item["retries"]
 
             try:
-                send_json(
-                    item["message"],
-                    item["port"],
-                    item["dscp"]
-                )
-
+                send_json(item["message"], item["port"], item["dscp"])
                 print(
-                    f"[RETRY {retry_number}] "
-                    f"Notification {notification_id}"
+                    f"[RETRY {retry_number}] Notification "
+                    f"{notification_id}"
                 )
-
             except OSError as error:
                 print(f"[RETRY ERROR] {error}")
 
@@ -161,7 +119,6 @@ def receive_messages():
     while running:
         try:
             data, address = client.recvfrom(BUFFER_SIZE)
-
             response = json.loads(data.decode("utf-8"))
 
             if not isinstance(response, dict):
@@ -170,62 +127,35 @@ def receive_messages():
             message_type = response.get("type")
 
             if message_type == "REGISTER_ACK":
-
                 print("[SUCCESS] Subscriber registered.")
 
             elif message_type == "NOTIFICATION":
-
                 notification_id = str(response.get("id", ""))
                 received_at = time.time()
 
                 with lock:
-                    is_duplicate = (
-                        notification_id in seen_notifications
-                    )
-
+                    is_duplicate = notification_id in seen_notifications
                     seen_notifications.add(notification_id)
 
                 if not is_duplicate:
-
                     print("\n========== NOTIFICATION ==========")
-
-                    print(
-                        "Priority:",
-                        response.get("priority")
-                    )
-
-                    print(
-                        "From:",
-                        response.get("sender")
-                    )
-
-                    print(
-                        "Message:",
-                        response.get("message")
-                    )
-
+                    print("Priority:", response.get("priority"))
+                    print("From:", response.get("sender"))
+                    print("Message:", response.get("message"))
                     print("ID:", notification_id)
 
                     sent_at = response.get("sent_at")
 
                     if isinstance(sent_at, (int, float)):
-
-                        latency_ms = (
-                            received_at - sent_at
-                        ) * 1000
-
+                        latency_ms = (received_at - sent_at) * 1000
                         print(
                             f"Approximate end-to-end latency: "
                             f"{latency_ms:.2f} ms"
                         )
 
                     print("==================================")
-
                 else:
-
-                    print(
-                        f"[DUPLICATE] ID={notification_id} ignored."
-                    )
+                    print(f"[DUPLICATE] ID={notification_id} ignored.")
 
                 try:
                     send_json({
@@ -233,12 +163,10 @@ def receive_messages():
                         "id": notification_id,
                         "received_at": received_at
                     })
-
                 except OSError as error:
                     print(f"[ACK SEND ERROR] {error}")
 
             elif message_type == "ACK":
-
                 notification_id = str(response.get("id", ""))
 
                 with lock:
@@ -246,62 +174,37 @@ def receive_messages():
 
                 print(
                     f"[SERVER ACK] {response.get('message')} "
-                    f"(recipients: "
-                    f"{response.get('recipient_count', 0)})"
+                    f"(recipients: {response.get('recipient_count', 0)})"
                 )
 
             elif message_type == "ERROR":
-
-                print(
-                    "[SERVER ERROR]",
-                    response.get("message")
-                )
+                print("[SERVER ERROR]", response.get("message"))
 
         except socket.timeout:
             continue
 
-        except (
-            OSError,
-            json.JSONDecodeError,
-            UnicodeDecodeError
-        ) as error:
-
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as error:
             if running:
                 print(f"[RECEIVE ERROR] {error}")
-
             break
 
 
 def main():
     global running, name
 
-    name = input(
-        "Enter your subscriber name: "
-    ).strip() or "Anonymous"
+    name = input("Enter your subscriber name: ").strip() or "Anonymous"
 
-    threading.Thread(
-        target=receive_messages,
-        daemon=True
-    ).start()
-
-    threading.Thread(
-        target=retry_unacknowledged,
-        daemon=True
-    ).start()
+    threading.Thread(target=receive_messages, daemon=True).start()
+    threading.Thread(target=retry_unacknowledged, daemon=True).start()
 
     try:
-
         send_json({
             "type": "REGISTER",
             "name": name
         })
 
         while True:
-
-            print(
-                "\n========== EMERGENCY NOTIFICATION CLIENT =========="
-            )
-
+            print("\n========== EMERGENCY NOTIFICATION CLIENT ==========")
             print("1. Send normal notification")
             print("2. Send emergency notification")
             print("3. Exit")
@@ -312,39 +215,24 @@ def main():
                 break
 
             if choice not in ("1", "2"):
-
                 print("Choose 1, 2, or 3.")
-
                 continue
 
-            text = input(
-                "Enter notification message: "
-            ).strip()
+            text = input("Enter notification message: ").strip()
 
             if not text:
-
                 print("Message cannot be empty.")
-
                 continue
 
-            priority = (
-                "EMERGENCY"
-                if choice == "2"
-                else "NORMAL"
-            )
-
+            priority = "EMERGENCY" if choice == "2" else "NORMAL"
             send_notification(priority, text)
 
     except (KeyboardInterrupt, OSError):
-
         print("\nClient interrupted or network unavailable.")
 
     finally:
-
         running = False
-
         client.close()
-
         print("Client closed.")
 
 
