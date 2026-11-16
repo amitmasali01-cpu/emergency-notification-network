@@ -1,28 +1,38 @@
-# tests/run_evaluation.py
-import time
-import csv
-import os
+"""
+Emergency Notification Network
+Performance Evaluation
 
-def run_tests():
-    print("Starting Evaluation Matrix (Normal vs Emergency)...")
-    
-    # Simulates test results for D1 demonstration
-    results = [
-        {"case": "normal_baseline", "sent": 50, "lost": 0, "delivery_%": 100.0, "avg_rtt_ms": 12.5, "p95_rtt_ms": 15.2},
-        {"case": "emergency_baseline", "sent": 50, "lost": 0, "delivery_%": 100.0, "avg_rtt_ms": 11.8, "p95_rtt_ms": 14.1},
-        {"case": "normal_congested", "sent": 50, "lost": 8, "delivery_%": 84.0, "avg_rtt_ms": 145.2, "p95_rtt_ms": 210.5},
-        {"case": "emergency_congested", "sent": 50, "lost": 1, "delivery_%": 98.0, "avg_rtt_ms": 25.4, "p95_rtt_ms": 35.0},
-    ]
-    
-    os.makedirs("results", exist_ok=True)
-    filepath = "results/evaluation_matrix.csv"
-    
-    with open(filepath, mode='w', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=results[0].keys())
-        writer.writeheader()
-        writer.writerows(results)
-        
-    print(f"Evaluation complete. Results saved to {filepath}")
+This script is a placeholder for actual experimental evaluation.
+
+Do not report simulated or hardcoded values as measured results.
+Person 3 should update this script after collecting real network
+measurements.
+"""
+
+from pathlib import Path
+
+
+def main():
+    results_file = Path(__file__).resolve().parent.parent / "results" / "measurements.csv"
+
+    print("Emergency Notification Network - Performance Evaluation")
+    print("-" * 55)
+
+    if results_file.exists():
+        print(f"Measurement file found: {results_file}")
+        print("Ensure that the CSV contains actual experimental measurements.")
+    else:
+        print("No measurement file found.")
+
+    print("\nMetrics to evaluate:")
+    print("1. Average latency")
+    print("2. Packet loss")
+    print("3. Notification delivery rate")
+    print("4. Emergency acknowledgement time")
+
+    print("\nActual performance evaluation will be completed")
+    print("after collecting experimental network data.")
+
 
 if __name__ == "__main__":
-    run_tests()
+    main()
