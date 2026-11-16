@@ -1,5 +1,1 @@
-Case,Sent,Lost,Delivery %,Avg RTT (ms),P95 RTT (ms)
-Normal Baseline,50,0,100,12.5,15.2
-Emergency Baseline,50,0,100,11.8,14.1
-Normal Congested,50,8,84,145.2,210.5
-Emergency Congested,50,1,98,25.4,35.0
+Test Condition,Traffic Type,Packets Sent,Packets Lost,Delivery Rate (%),Average Latency (ms),P95 Latency (ms),Average ACK Time (ms)
