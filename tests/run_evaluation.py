@@ -1,4 +1,9 @@
 # tests/run_evaluation.py
+# HOW TO RUN THIS INSIDE MININET:
+# 1. Start topology: sudo python3 sdn/topology.py
+# 2. In the mininet> prompt, run this script on the 'snd' host:
+#    mininet> snd python3 tests/run_evaluation.py
+
 import socket
 import time
 import csv
@@ -6,8 +11,7 @@ import statistics
 import os
 
 # --- CONFIGURATION ---
-# IMPORTANT: Check Person 1's topology.py to see the exact Server IP!
-# It is usually 10.0.0.1 or 10.0.0.2 in Mininet.
+# Server IP (srv) defined in topology.py is 10.0.0.1
 SERVER_IP = "10.0.0.1"  
 NORMAL_PORT = 5000
 EMERGENCY_PORT = 5001
