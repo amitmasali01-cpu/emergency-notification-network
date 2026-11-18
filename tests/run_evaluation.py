@@ -82,7 +82,7 @@ def run_tests():
     emerg_cong = measure_rtt(EMERGENCY_PORT, True)
     results.append(["Emergency Congested", 50, emerg_cong['loss'], emerg_cong['delivery'], emerg_cong['avg'], emerg_cong['max']])
 
-    # Save to CSV
+    # Save to CSV automatically
     os.makedirs("results", exist_ok=True)
     with open("results/measurements.csv", "w", newline="") as f:
         writer = csv.writer(f)
